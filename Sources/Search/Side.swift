@@ -337,6 +337,7 @@ struct SideBar: View {
                     BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
                 }
             Spacer(minLength: 0)
+            SpaceRow(browser: browser)
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 10)

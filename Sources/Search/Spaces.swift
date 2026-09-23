@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import WebKit
 
 // Rows of tabs that don't share a cookie.
@@ -119,5 +120,81 @@ enum Spaces {
         alert.addButton(withTitle: "Cancel")
         alert.buttons.first?.hasDestructiveAction = true
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+// MARK: - at the foot of the column
+
+/// The Spaces along the bottom of the sidebar, a letter each, the way a pin
+/// is a letter — the one you're in lit. Only a "+" until there is a second
+/// Space to switch to: nobody who never makes one should be made to look at
+/// a row of one.
+struct SpaceRow: View {
+    @ObservedObject var browser: Browser
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if browser.spaces.count > 1 {
+                ForEach(Array(browser.spaces.enumerated()), id: \.element.id) { index, space in
+                    SpaceMark(space: space, number: index + 1, live: space.id == browser.spaceID) {
+                        browser.enter(space)
+                    }
+                    .contextMenu {
+                        Button("Rename…") { SpaceRow.rename(space, in: browser) }
+                        if !space.isHome {
+                            Button("Delete…") { if Spaces.confirmDelete(space) { browser.delete(space) } }
+                        }
+                    }
+                }
+            }
+            Door(icon: "plus", help: "New Space") { SpaceRow.create(in: browser) }
+        }
+    }
+
+    static func create(in browser: Browser) {
+        guard let name = Spaces.askName(
+            title: "New Space",
+            info: "A row of tabs with sign-ins of its own. History, bookmarks and passwords are shared.",
+            button: "Create"
+        ) else { return }
+        browser.newSpace(named: name)
+    }
+
+    static func rename(_ space: Space, in browser: Browser) {
+        guard let name = Spaces.askName(
+            title: "Rename “\(space.name)”", info: "", button: "Rename", filled: space.name
+        ) else { return }
+        browser.rename(space, to: name)
+    }
+}
+
+/// One Space: the first letter of its name, in the same square a Door is.
+private struct SpaceMark: View {
+    let space: Space
+    let number: Int
+    let live: Bool
+    let act: () -> Void
+
+    @State private var hovering = false
+
+    private var letter: String { space.name.first.map { String($0).uppercased() } ?? "·" }
+
+    var body: some View {
+        Button(action: act) {
+            Text(letter)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(live ? Palette.ink : (hovering ? Palette.ink.opacity(0.7) : Palette.muted))
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(live ? Palette.wash : (hovering ? Palette.hover : .clear))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(number <= 9 ? "\(space.name) — ⌃\(number)" : space.name)
+        .animation(Motion.quick, value: hovering)
+        .animation(Motion.quick, value: live)
     }
 }

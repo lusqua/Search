@@ -136,19 +136,8 @@ struct SearchApp: App {
                     .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control) : nil)
                 }
                 Divider()
-                Button("New Space…") {
-                    if let name = Spaces.askName(
-                        title: "New Space",
-                        info: "A row of tabs with sign-ins of its own. History, bookmarks and passwords are shared.",
-                        button: "Create"
-                    ) { browser.newSpace(named: name) }
-                }
-                Button("Rename Space…") {
-                    let space = browser.space
-                    if let name = Spaces.askName(
-                        title: "Rename “\(space.name)”", info: "", button: "Rename", filled: space.name
-                    ) { browser.rename(space, to: name) }
-                }
+                Button("New Space…") { SpaceRow.create(in: browser) }
+                Button("Rename Space…") { SpaceRow.rename(browser.space, in: browser) }
                 Button("Delete Space…") {
                     let space = browser.space
                     if Spaces.confirmDelete(space) { browser.delete(space) }
