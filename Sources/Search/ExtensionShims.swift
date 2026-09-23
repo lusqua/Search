@@ -2530,7 +2530,7 @@ enum ExtensionShims {
             "webSQL": [WKWebsiteDataTypeWebSQLDatabases], "fileSystems": [WKWebsiteDataTypeFileSystem],
         ]
         for (key, on) in what where on { types.formUnion(map[key] ?? []) }
-        let store = Store.websites
+        let store = Spaces.store
         if !types.isEmpty {
             if let origins {
                 let records = await store.dataRecords(ofTypes: types)

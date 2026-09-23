@@ -127,6 +127,34 @@ struct SearchApp: App {
                 Button("Stop Sound in Tab") { browser.pauseMedia() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
             }
+            CommandMenu("Spaces") {
+                ForEach(Array(browser.spaces.enumerated()), id: \.element.id) { index, space in
+                    Toggle(space.name, isOn: Binding(
+                        get: { browser.spaceID == space.id },
+                        set: { _ in browser.enter(space) }
+                    ))
+                    .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control) : nil)
+                }
+                Divider()
+                Button("New Space…") {
+                    if let name = Spaces.askName(
+                        title: "New Space",
+                        info: "A row of tabs with sign-ins of its own. History, bookmarks and passwords are shared.",
+                        button: "Create"
+                    ) { browser.newSpace(named: name) }
+                }
+                Button("Rename Space…") {
+                    let space = browser.space
+                    if let name = Spaces.askName(
+                        title: "Rename “\(space.name)”", info: "", button: "Rename", filled: space.name
+                    ) { browser.rename(space, to: name) }
+                }
+                Button("Delete Space…") {
+                    let space = browser.space
+                    if Spaces.confirmDelete(space) { browser.delete(space) }
+                }
+                .disabled(browser.space.isHome)
+            }
             CommandMenu("Bookmarks") {
                 Button("Add This Page") { browser.bookmarkCurrent() }
                     .keyboardShortcut("b", modifiers: [.command, .shift])

@@ -16,9 +16,14 @@ enum Session {
         var active: Int
     }
 
-    private static var file: URL { Store.file("session.json") }
+    /// The first Space's is the file there always was; every other Space
+    /// has one of its own beside it.
+    private static func file(for space: UUID) -> URL {
+        space == Space.homeID ? Store.file("session.json") : Store.file("session-\(space.uuidString).json")
+    }
 
-    static func read() -> Shape {
+    static func read(_ space: UUID = Space.homeID) -> Shape {
+        let file = file(for: space)
         guard let data = try? Data(contentsOf: file) else { return Shape(tabs: [], active: 0) }
         guard let shape = try? JSONDecoder().decode(Shape.self, from: data) else {
             // A file that's there but won't decode is not the same as no
@@ -33,8 +38,8 @@ enum Session {
     /// `now` writes on the calling thread. Quitting doesn't wait for a
     /// background queue, and a session handed to one on the way out is a
     /// session that may never reach the disk.
-    static func write(now: Bool = false, _ shape: Shape) {
-        let file = Session.file
+    static func write(now: Bool = false, _ shape: Shape, in space: UUID = Space.homeID) {
+        let file = file(for: space)
         let put = {
             guard let data = try? JSONEncoder().encode(shape) else { return }
             try? FileManager.default.createDirectory(
@@ -47,5 +52,11 @@ enum Session {
         } else {
             DispatchQueue.global(qos: .utility).async(execute: put)
         }
+    }
+
+    /// A deleted Space's tabs, gone with it.
+    static func forget(_ space: UUID) {
+        guard space != Space.homeID else { return }
+        try? FileManager.default.removeItem(at: file(for: space))
     }
 }

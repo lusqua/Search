@@ -405,6 +405,102 @@ final class Browser: NSObject, ObservableObject {
         )
     }
 
+    // MARK: - spaces
+
+    /// Every Space, the first one first. Never empty.
+    @Published private(set) var spaces: [Space] = [.home]
+    /// The one whose tabs are in the row.
+    @Published private(set) var spaceID = Space.homeID
+    var space: Space { spaces.first { $0.id == spaceID } ?? .home }
+
+    /// The rows of the Spaces you aren't in, as you left them: the same tabs,
+    /// pages and all, so going back is as quick as switching tabs. They sleep
+    /// on the same clock as any other tab (see Sleep.swift).
+    struct Parked {
+        var tabs: [Tab]
+        var active: Tab.ID?
+        var ghosts: [Ghost]
+    }
+    private var parked: [UUID: Parked] = [:]
+    var parkedTabs: [Tab] { parked.values.flatMap(\.tabs) }
+
+    /// ⌃1 to ⌃9, or the Spaces menu. The row is swapped for the other
+    /// Space's; the window, and everything that isn't a tab, stays.
+    func enter(_ target: Space) {
+        guard target.id != spaceID, spaces.contains(where: { $0.id == target.id }) else { return }
+        // Whatever was half done belongs to the row being put away.
+        cancelTabEdit()
+        endPinEdit()
+        if finding { closeFind() }
+        summoning = false
+        suggesting = nil
+        editing = false
+        typed = ""
+        // A video out in the little window goes home before its tab leaves.
+        land()
+
+        writeSession(now: true)
+        // A script's tabs are the script's, not the Space's: they come along.
+        let carried = tabs.filter(\.bench)
+        parked[spaceID] = Parked(tabs: tabs.filter { !$0.bench }, active: activeID, ghosts: ghosts)
+
+        spaceID = target.id
+        Spaces.current = target.id
+        Store.settings.set(target.id.uuidString, forKey: "space")
+
+        if let back = parked.removeValue(forKey: target.id) {
+            tabs = back.tabs + carried
+            ghosts = back.ghosts
+            activeID = back.active ?? back.tabs.first?.id
+        } else {
+            tabs = carried
+            ghosts = []
+            activeID = nil
+            if !unpack(Session.read(target.id)) {
+                let tab = Tab()
+                prepare(tab)
+                tabs.insert(tab, at: 0)
+                activeID = tab.id
+                focusRequest += 1
+            }
+        }
+        if let active, !active.wake() { active.revive() }
+        active?.touch()
+        announce(target.name)
+    }
+
+    /// Named when made, and entered straight away — a Space you just asked
+    /// for is the one you want to be in.
+    func newSpace(named name: String) {
+        let made = Space(id: UUID(), name: name)
+        spaces.append(made)
+        Spaces.write(spaces)
+        enter(made)
+    }
+
+    func rename(_ target: Space, to name: String) {
+        guard let index = spaces.firstIndex(where: { $0.id == target.id }) else { return }
+        spaces[index].name = name
+        Spaces.write(spaces)
+    }
+
+    /// Its tabs close, its session goes, and so does everything its sites
+    /// kept. The first Space can be renamed but not deleted: it is where the
+    /// browser's own store has always been.
+    func delete(_ target: Space) {
+        guard !target.isHome, spaces.contains(where: { $0.id == target.id }) else { return }
+        if target.id == spaceID, let home = spaces.first { enter(home) }
+        for tab in parked.removeValue(forKey: target.id)?.tabs ?? [] { tab.close() }
+        spaces.removeAll { $0.id == target.id }
+        Spaces.write(spaces)
+        Session.forget(target.id)
+        Spaces.forget(target.id)
+        announce("“\(target.name)” deleted")
+    }
+
+    /// The Space a message is about, when there is more than one to mean.
+    private var inSpace: String { spaces.count > 1 ? " in \(space.name)" : "" }
+
     // MARK: - what is kept, and getting rid of it
 
     @Published var recalling = false
@@ -415,10 +511,10 @@ final class Browser: NSObject, ObservableObject {
     /// Clearing it signs you out of everything, which is the point.
     func clearSites() {
         let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        Store.websites.removeData(
+        Spaces.store.removeData(
             ofTypes: types, modifiedSince: .distantPast
         ) { [weak self] in
-            MainActor.assumeIsolated { self?.announce("Signed out of everything") }
+            MainActor.assumeIsolated { self?.announce("Signed out of everything" + (self?.inSpace ?? "")) }
         }
     }
 
@@ -429,10 +525,10 @@ final class Browser: NSObject, ObservableObject {
             WKWebsiteDataTypeMemoryCache,
             WKWebsiteDataTypeOfflineWebApplicationCache,
         ]
-        Store.websites.removeData(
+        Spaces.store.removeData(
             ofTypes: types, modifiedSince: .distantPast
         ) { [weak self] in
-            MainActor.assumeIsolated { self?.announce("Cache cleared") }
+            MainActor.assumeIsolated { self?.announce("Cache cleared" + (self?.inSpace ?? "")) }
         }
     }
 
@@ -714,8 +810,15 @@ final class Browser: NSObject, ObservableObject {
             watchForSleep()
         }
 
-        let saved = Session.read()
-        guard !saved.tabs.isEmpty else {
+        // The Space open when the app last quit, if it still exists.
+        spaces = Spaces.read()
+        if let kept = Store.settings.string(forKey: "space").flatMap(UUID.init(uuidString:)),
+           spaces.contains(where: { $0.id == kept }) {
+            spaceID = kept
+        }
+        Spaces.current = spaceID
+
+        guard unpack(Session.read(spaceID)) else {
             // A blank tab costs nothing until it is asked for its page. Its
             // web view — and with it WebKit's helper processes — is built a
             // moment after the window is up, so that the first address typed
@@ -729,22 +832,27 @@ final class Browser: NSObject, ObservableObject {
             }
             return
         }
+    }
+
+    /// A session's tabs, back in the row, with the one you were on picked
+    /// and awake. False when there was nothing in it to bring back.
+    private func unpack(_ saved: Session.Shape) -> Bool {
+        var came: [Tab] = []
         for entry in saved.tabs {
             guard let url = URL(string: entry.url) else { continue }
             let tab = Tab()
             prepare(tab)
             tab.restore(url: url, title: entry.title)
             tab.pin = entry.pin
-            tabs.append(tab)
+            came.append(tab)
         }
-        guard !tabs.isEmpty else {
-            adopt(Tab())
-            return
-        }
-        let here = min(max(0, saved.active), tabs.count - 1)
-        activeID = tabs[here].id
+        guard !came.isEmpty else { return false }
+        tabs.append(contentsOf: came)
+        let here = came[min(max(0, saved.active), came.count - 1)]
+        activeID = here.id
         // Only the one you were looking at actually loads.
-        tabs[here].wake()
+        here.wake()
+        return true
     }
 
     /// The few settings that something else has to be told about. The rest are
@@ -833,21 +941,22 @@ final class Browser: NSObject, ObservableObject {
     }
 
     private func writeSession(now: Bool = false) {
-        Session.write(
-            now: now,
-            .init(
-                tabs: tabs.compactMap { tab in
-                    guard !tab.shy, !tab.bench else { return nil }
-                    // A sleeping tab holds its address in `pending`; asking for
-                    // it there too means a pin can never be written out of
-                    // existence by whatever its web view happens to be showing.
-                    guard let url = tab.pending ?? tab.address,
-                          url.scheme?.hasPrefix("http") == true
-                    else { return nil }
-                    return Session.Entry(url: url.absoluteString, title: tab.title, pin: tab.pin)
-                },
-                active: tabs.firstIndex { $0.id == activeID } ?? 0
-            )
+        Session.write(now: now, shape(of: tabs, active: activeID), in: spaceID)
+    }
+
+    private func shape(of tabs: [Tab], active: Tab.ID?) -> Session.Shape {
+        .init(
+            tabs: tabs.compactMap { tab in
+                guard !tab.shy, !tab.bench else { return nil }
+                // A sleeping tab holds its address in `pending`; asking for
+                // it there too means a pin can never be written out of
+                // existence by whatever its web view happens to be showing.
+                guard let url = tab.pending ?? tab.address,
+                      url.scheme?.hasPrefix("http") == true
+                else { return nil }
+                return Session.Entry(url: url.absoluteString, title: tab.title, pin: tab.pin)
+            },
+            active: tabs.firstIndex { $0.id == active } ?? 0
         )
     }
 
@@ -866,6 +975,11 @@ final class Browser: NSObject, ObservableObject {
     /// quit, before there is a process left to finish the wait on its behalf.
     func flushSession() {
         writeSession(now: true)
+        // A page in a Space you aren't in can still go somewhere on its own —
+        // a redirect, a sign-in finishing — after its Space was last written.
+        for (id, row) in parked {
+            Session.write(now: true, shape(of: row.tabs, active: row.active), in: id)
+        }
     }
 
     // MARK: - tabs
